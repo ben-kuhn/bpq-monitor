@@ -1,2 +1,342 @@
 <!DOCTYPE html>
-<html><body><p>placeholder</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BPQ Monitor</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0d1117;
+  --pane-bg:  #161b22;
+  --border:   #30363d;
+  --text:     #e6edf3;
+  --green:    #3fb950;
+  --red:      #f85149;
+  --rx:       #79c0ff;
+  --tx:       #e3b341;
+  --dim:      #8b949e;
+  --strip-h:  38px;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: monospace; }
+
+/* ── Status strip ── */
+#strip {
+  height: var(--strip-h);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: #010409;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+.chip.has-service { cursor: pointer; }
+.chip.has-service:hover { background: #1c2128; }
+
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  flex-shrink: 0;
+}
+.dot.green { background: var(--green); }
+
+/* ── Dropdown menu ── */
+.menu {
+  display: none;
+  position: absolute;
+  top: var(--strip-h);
+  background: #161b22;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-width: 140px;
+  z-index: 10;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.menu.open { display: block; }
+
+.menu-pass {
+  padding: 6px 8px;
+  display: flex;
+  gap: 4px;
+  flex-direction: column;
+}
+.menu-pass input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  padding: 3px 6px;
+  font-family: monospace;
+  font-size: 11px;
+  width: 100%;
+}
+.menu-err { color: var(--red); font-size: 10px; padding: 0 8px 4px; display: none; }
+
+.menu-item {
+  padding: 5px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.menu-item:hover { background: #1c2128; }
+.menu-item.disabled { opacity: 0.35; pointer-events: none; }
+
+/* ── Monitor grid ── */
+#grid {
+  display: grid;
+  height: calc(100vh - var(--strip-h));
+  gap: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.pane {
+  background: var(--pane-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.pane-header {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pane-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  scroll-behavior: smooth;
+}
+
+.rx { color: var(--rx); }
+.tx { color: var(--tx); }
+</style>
+</head>
+<body>
+
+<div id="strip"></div>
+<div id="grid"></div>
+
+<script>
+'use strict';
+
+const strip = document.getElementById('strip');
+const grid  = document.getElementById('grid');
+
+let portMap   = {};   // num → {label, service, dot, paneBody, autoScroll}
+let portState = {};   // num → last status event
+let activeMenu = null;
+
+async function init() {
+  const cfg = await fetch('/config').then(r => r.json());
+  const cols = cfg.columns || 3;
+
+  // Build grid template
+  // Determine rows needed
+  const portRows = {};
+  const portCols = {};
+  let autoRow = 0, autoCol = 0;
+  for (const p of cfg.ports) {
+    if (p.row > 0 || p.col > 0) {
+      portRows[p.num] = p.row;
+      portCols[p.num] = p.col;
+    } else {
+      portRows[p.num] = autoRow + 1;
+      portCols[p.num] = autoCol + 1;
+      autoCol++;
+      if (autoCol >= cols) { autoCol = 0; autoRow++; }
+    }
+  }
+
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+  for (const p of cfg.ports) {
+    // Status strip chip
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (p.service ? ' has-service' : '');
+    chip.dataset.port = p.num;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    chip.appendChild(dot);
+    chip.appendChild(document.createTextNode(p.label));
+    strip.appendChild(chip);
+
+    // Monitor pane
+    const pane = document.createElement('div');
+    pane.className = 'pane';
+    pane.style.gridColumn = portCols[p.num];
+    pane.style.gridRow    = portRows[p.num];
+
+    const header = document.createElement('div');
+    header.className = 'pane-header';
+    header.textContent = p.label;
+    pane.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'pane-body';
+    pane.appendChild(body);
+    grid.appendChild(pane);
+
+    // Auto-scroll: pause if user scrolls up
+    let autoScroll = true;
+    body.addEventListener('scroll', () => {
+      autoScroll = body.scrollTop + body.clientHeight >= body.scrollHeight - 8;
+    });
+
+    portMap[p.num] = { label: p.label, service: p.service, dot, body, autoScroll: () => autoScroll, setAutoScroll: v => { autoScroll = v; } };
+
+    // Dropdown
+    if (p.service) {
+      const menu = buildMenu(p.num, p.service, chip);
+      document.body.appendChild(menu);
+      chip.addEventListener('click', e => {
+        e.stopPropagation();
+        if (activeMenu && activeMenu !== menu) activeMenu.classList.remove('open');
+        menu.classList.toggle('open');
+        activeMenu = menu.classList.contains('open') ? menu : null;
+        if (menu.classList.contains('open')) {
+          const r = chip.getBoundingClientRect();
+          menu.style.left = r.left + 'px';
+        }
+      });
+    }
+  }
+
+  document.addEventListener('click', () => {
+    if (activeMenu) { activeMenu.classList.remove('open'); activeMenu = null; }
+  });
+
+  connectSSE();
+}
+
+function buildMenu(portNum, service, chip) {
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.dataset.port = portNum;
+
+  const passSection = document.createElement('div');
+  passSection.className = 'menu-pass';
+  const passInput = document.createElement('input');
+  passInput.type = 'password';
+  passInput.placeholder = 'password';
+  passInput.autocomplete = 'current-password';
+  passSection.appendChild(passInput);
+  const errSpan = document.createElement('div');
+  errSpan.className = 'menu-err';
+  errSpan.textContent = 'Unauthorized';
+  passSection.appendChild(errSpan);
+  menu.appendChild(passSection);
+
+  // Pre-fill from sessionStorage
+  const storedPass = sessionStorage.getItem('actionPassword');
+  if (storedPass) passInput.value = storedPass;
+
+  function addItem(label, action, condition) {
+    const item = document.createElement('div');
+    item.className = 'menu-item';
+    item.textContent = label;
+    item.dataset.action = action;
+    menu.appendChild(item);
+    item.addEventListener('click', async e => {
+      e.stopPropagation();
+      const pass = passInput.value || sessionStorage.getItem('actionPassword') || '';
+      errSpan.style.display = 'none';
+      const res = await fetch('/action', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + pass, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: portNum, action })
+      });
+      if (res.status === 401) {
+        sessionStorage.removeItem('actionPassword');
+        passInput.value = '';
+        errSpan.style.display = 'block';
+        return;
+      }
+      sessionStorage.setItem('actionPassword', pass);
+      menu.classList.remove('open');
+      activeMenu = null;
+    });
+    return item;
+  }
+
+  const startItem   = addItem('▶ Start',   'start');
+  const stopItem    = addItem('■ Stop',    'stop');
+  const restartItem = addItem('↺ Restart', 'restart');
+
+  // Update item availability based on port state
+  menu.updateState = (state) => {
+    const running = state && state.toLowerCase().includes('connected');
+    startItem.classList.toggle('disabled', running);
+    stopItem.classList.toggle('disabled', !running);
+    restartItem.classList.toggle('disabled', !running);
+  };
+  menu.updateState('');
+
+  return menu;
+}
+
+function connectSSE() {
+  const es = new EventSource('/events');
+  es.onmessage = e => {
+    try { handleEvent(JSON.parse(e.data)); } catch {}
+  };
+  es.onerror = () => {
+    setTimeout(() => { es.close(); connectSSE(); }, 3000);
+  };
+}
+
+function handleEvent(e) {
+  const p = portMap[e.port];
+  if (!p) return;
+
+  if (e.type === 'status') {
+    portState[e.port] = e.state;
+    const connected = e.state && e.state.toLowerCase().includes('connected');
+    p.dot.className = 'dot' + (connected ? ' green' : '');
+    // Update menu state if menu exists
+    const menu = document.querySelector(`.menu[data-port="${e.port}"]`);
+    if (menu && menu.updateState) menu.updateState(e.state);
+  }
+
+  if (e.type === 'monitor' && e.line) {
+    const line = document.createElement('div');
+    line.className = e.dir === 'tx' ? 'tx' : 'rx';
+    line.textContent = e.line;
+    p.body.appendChild(line);
+    // Limit to 500 lines per pane
+    while (p.body.children.length > 500) p.body.removeChild(p.body.firstChild);
+    if (p.autoScroll()) p.body.scrollTop = p.body.scrollHeight;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

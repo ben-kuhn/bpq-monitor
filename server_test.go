@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -115,6 +116,22 @@ func TestServer_ActionAuth_NoServicePort(t *testing.T) {
 
 	if rec.Code != 400 {
 		t.Errorf("status: got %d, want 400 (no service configured)", rec.Code)
+	}
+}
+
+func TestServer_Config(t *testing.T) {
+	srv, _ := testServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/config", nil)
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Errorf("status: %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	ports := resp["ports"].([]interface{})
+	if len(ports) != 2 {
+		t.Errorf("ports: got %d, want 2", len(ports))
 	}
 }
 

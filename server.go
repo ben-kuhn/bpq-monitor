@@ -34,6 +34,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /events", s.handleSSE)
 	mux.HandleFunc("POST /action", s.handleAction)
+	mux.HandleFunc("GET /config", s.handleConfig)
 	return mux
 }
 
@@ -73,6 +74,26 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 type actionRequest struct {
 	Port   int    `json:"port"`
 	Action string `json:"action"`
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	type portInfo struct {
+		Num     int    `json:"num"`
+		Label   string `json:"label"`
+		Service string `json:"service"`
+		Row     int    `json:"row"`
+		Col     int    `json:"col"`
+	}
+	type configResponse struct {
+		Columns int        `json:"columns"`
+		Ports   []portInfo `json:"ports"`
+	}
+	ports := make([]portInfo, len(s.cfg.Ports))
+	for i, p := range s.cfg.Ports {
+		ports[i] = portInfo{Num: p.Num, Label: p.Label, Service: p.Service, Row: p.Row, Col: p.Col}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(configResponse{Columns: s.cfg.Layout.Columns, Ports: ports})
 }
 
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
