@@ -72,13 +72,15 @@ func parseMonitorFrames(data []byte) []monitorFrame {
 // FBBClient connects to BPQ's BPQTermTCP monitor port and publishes
 // decoded monitor frames to the Hub as Event{Type:"monitor"} events.
 type FBBClient struct {
-	cfg BPQConfig
-	hub *Hub
+	cfg  BPQConfig
+	hub  *Hub
+	port int // BPQ port number (1-64); portmask = 1<<(port-1)
 }
 
-// NewFBBClient creates a new FBBClient.
-func NewFBBClient(cfg BPQConfig, hub *Hub) *FBBClient {
-	return &FBBClient{cfg: cfg, hub: hub}
+// NewFBBClient creates a new FBBClient that monitors a single BPQ port.
+// One FBBClient per configured port; BPQ filters server-side by portmask.
+func NewFBBClient(cfg BPQConfig, hub *Hub, port int) *FBBClient {
+	return &FBBClient{cfg: cfg, hub: hub, port: port}
 }
 
 // Run connects to BPQ, logs in, and streams monitor frames.
@@ -118,16 +120,17 @@ func (f *FBBClient) connect(ctx context.Context) error {
 }
 
 // login performs the BPQTermTCP handshake confirmed from LinBPQ TelnetV6.c
-// and QtTermTCP.cpp:
+// and BPQTermTCP.c:
 //
 //  1. Send "<username>\r<password>\rBPQTERMTCP\r" in one write — BPQ
 //     processes each CR-delimited token: username selects account,
 //     password authenticates, "BPQTERMTCP" enters BPQTermMode.
 //
-//  2. Send the monitor-control string "\\<portmask> <mtx> <mcom> <nodes>
-//     <colour> <ui> <utf8> <P8>\r" where P8=1 requests the port list.
-//     portmask=1 (all ports), mtx=1 (TX on), mcom=1 (connected on),
-//     nodes=0, colour=1, ui=0, utf8=0.
+//  2. Send the monitor-control string "\\<portmask_hex> <mtx> <mcom> <nodes>
+//     <colour> <ui> <utf8> <P8>\r".  portmask has one bit set for f.port
+//     so BPQ filters server-side and sends only that port's frames.
+//     mtx=1 (TX on), mcom=1 (connected on), nodes=0, colour=1,
+//     ui=0, utf8=0, P8=1 (request port-definition list on login).
 func (f *FBBClient) login(conn net.Conn) error {
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	defer conn.SetDeadline(time.Time{})
@@ -139,10 +142,9 @@ func (f *FBBClient) login(conn net.Conn) error {
 	}
 
 	// Step 2: monitor-control command.
-	// Format: \\<portmask_hex> <mtx> <mcom> <nodes> <colour> <ui> <utf8> <P8>\r
-	// portmask=1 (monitor port 1; QtTermTCP default), mtx=1, mcom=1,
-	// nodes=0, colour=1, ui=0, utf8=0, P8=1 (send port list).
-	monctl := "\\\\ffffffffffffffff 1 1 0 1 0 0 1\r"
+	// portmask: bit (port-1) enables BPQ-side filtering to this port only.
+	portMask := uint64(1) << uint(f.port-1)
+	monctl := fmt.Sprintf("\\\\%016x 1 1 0 1 0 0 1\r", portMask)
 	if _, err := fmt.Fprint(conn, monctl); err != nil {
 		return fmt.Errorf("write monitor control: %w", err)
 	}
@@ -184,6 +186,7 @@ func (f *FBBClient) readFrames(ctx context.Context, conn net.Conn) error {
 			for _, fr := range frames {
 				f.hub.Publish(Event{
 					Type: "monitor",
+					Port: f.port,
 					Dir:  fr.dir,
 					Line: fr.line,
 				})
