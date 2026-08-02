@@ -143,8 +143,10 @@ func (f *FBBClient) login(conn net.Conn) error {
 
 	// Step 2: monitor-control command.
 	// portmask: bit (port-1) enables BPQ-side filtering to this port only.
+	// LinBPQ TelnetV6.c gates on memcmp(..., "\\\\", 4) — requires exactly
+	// four backslash bytes before the portmask hex.
 	portMask := uint64(1) << uint(f.port-1)
-	monctl := fmt.Sprintf("\\\\%016x 1 1 0 1 0 0 1\r", portMask)
+	monctl := fmt.Sprintf("\\\\\\\\%016x 1 1 0 1 0 0 1\r", portMask)
 	if _, err := fmt.Fprint(conn, monctl); err != nil {
 		return fmt.Errorf("write monitor control: %w", err)
 	}

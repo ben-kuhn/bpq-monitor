@@ -86,7 +86,11 @@ func (p *Poller) fetchStatus(client *http.Client, port PortConfig) Event {
 		return Event{Type: "status", Port: port.Num, State: "unreachable"}
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("poller: port %d: read body: %v", port.Num, err)
+		return Event{Type: "status", Port: port.Num, State: "unreachable"}
+	}
 	s := scrapePortStatus(string(body))
 	return Event{
 		Type:    "status",
