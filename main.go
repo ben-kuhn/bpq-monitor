@@ -20,8 +20,8 @@ func main() {
 	}
 
 	hub := NewHub()
-	poller := NewPoller(cfg.BPQ, cfg.Ports, hub)
 	sysd := NewSystemdController()
+	poller := NewPoller(cfg.BPQ, cfg.Ports, hub, sysd)
 	srv := NewServer(*cfg, hub, sysd)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -29,10 +29,14 @@ func main() {
 
 	go poller.Run(ctx)
 
-	// One FBBClient per configured port; BPQ filters server-side by portmask.
+	// One FBBClient and one JournalClient per configured port.
 	for _, p := range cfg.Ports {
 		fbb := NewFBBClient(cfg.BPQ, hub, p.Num)
 		go fbb.Run(ctx)
+		if p.Service != "" {
+			jc := NewJournalClient(p.Num, p.Service, hub)
+			go jc.Run(ctx)
+		}
 	}
 
 	httpSrv := &http.Server{

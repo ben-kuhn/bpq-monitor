@@ -18,14 +18,16 @@ type monitorFrame struct {
 
 // parseMonitorFrames extracts monitor frames from a raw byte slice.
 //
-// Frame format confirmed from LinBPQ TelnetV6.c (DoMonitor / HOSTTRACEQ loop):
+// Frame format observed from LinBPQ TelnetV6.c (DoMonitor / HOSTTRACEQ loop):
 //
-//	Monitor frame:       0xFF 0x1B <colour> <text...> 0xFE
-//	  colour 17  (0x11) = RX (buffer initialised to "\xff\x1b\xb"; TX branch sets buffer[2]=91)
-//	  colour 91  (0x5B) = TX
-//	Port-definition:    0xFF 0xFF <pipe-delimited names> 0xFE  — silently skipped
+//	Monitor frame:    0xFF 0x1B <colour> <text...> 0xFE
+//	  colour 17 (0x11) = RX
+//	  colour 91 (0x5B) = TX
+//	Port-definition: 0xFF 0xFF <count>|<name>|<name>|...  (NO 0xFE terminator)
 //
-// Incomplete frames (no closing 0xFE) are silently ignored.
+// The port-definition frame has no 0xFE.  Searching for 0xFE to bound it
+// would consume the terminator of the next real monitor frame.  Instead we
+// skip past 0xFF 0xFF and the following non-0xFF bytes to reach the next frame.
 func parseMonitorFrames(data []byte) []monitorFrame {
 	var frames []monitorFrame
 	for {
@@ -33,25 +35,34 @@ func parseMonitorFrames(data []byte) []monitorFrame {
 		if start < 0 {
 			break
 		}
+		if start+1 >= len(data) {
+			break // need at least 2 bytes to identify frame type
+		}
+
+		// Port-definition frame: 0xFF 0xFF … (no 0xFE terminator).
+		// Skip past the two-byte header and all following non-0xFF bytes.
+		if data[start+1] == 0xFF {
+			data = data[start+2:]
+			next := bytes.IndexByte(data, 0xFF)
+			if next < 0 {
+				break // rest is port-def text, no monitor frames follow
+			}
+			data = data[next:]
+			continue
+		}
+
+		// Monitor frame: 0xFF 0x1B <colour> <text...> 0xFE
 		end := bytes.IndexByte(data[start:], 0xFE)
 		if end < 0 {
-			// Incomplete frame — stop; caller may append more data later.
-			break
+			break // incomplete frame — wait for more data
 		}
 		frame := data[start : start+end+1]
 		data = data[start+end+1:]
 
-		// Port-definition frame: 0xFF 0xFF … 0xFE — skip.
-		if len(frame) >= 2 && frame[1] == 0xFF {
-			continue
-		}
-
-		// Minimum valid monitor frame: 0xFF 0x1B <colour> <1-byte text> 0xFE = 5 bytes.
+		// Minimum: 0xFF 0x1B <colour> <1-char> 0xFE = 5 bytes.
 		if len(frame) < 5 {
 			continue
 		}
-
-		// Expect ESC byte at position 1.
 		if frame[1] != 0x1B {
 			continue
 		}

@@ -49,12 +49,30 @@ func TestScrapePortStatus_Connected(t *testing.T) {
 	if s.freq != "14.1023" {
 		t.Errorf("freq: got %q", s.freq)
 	}
+	if !s.valid {
+		t.Error("expected valid=true for a port status page")
+	}
+}
+
+func TestScrapePortStatus_MainPage(t *testing.T) {
+	// BPQ returns its main index page for ports without a web driver window.
+	mainPage := `<html><head><title>N0CALL-7's BPQ32 Web Server</title></head><body><h1>BPQ32 Node</h1></body></html>`
+	s := scrapePortStatus(mainPage)
+	if s.valid {
+		t.Error("expected valid=false for main BPQ page")
+	}
+	if s.state != "" {
+		t.Errorf("expected empty state for main page, got %q", s.state)
+	}
 }
 
 func TestScrapePortStatus_Disconnected(t *testing.T) {
 	s := scrapePortStatus(disconnectedHTML)
 	if s.state != "" {
 		t.Errorf("expected empty state, got %q", s.state)
+	}
+	if !s.valid {
+		t.Error("expected valid=true even for a disconnected port status page")
 	}
 }
 
@@ -70,7 +88,7 @@ func TestPoller_PublishesStatusEvents(t *testing.T) {
 
 	cfg := BPQConfig{WebURL: srv.URL, FBBPort: 0}
 	ports := []PortConfig{{Num: 6, Label: "VARA FM"}}
-	p := NewPoller(cfg, ports, hub)
+	p := NewPoller(cfg, ports, hub, NewSystemdController())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -102,7 +120,7 @@ func TestPoller_UnreachableMarksRed(t *testing.T) {
 
 	cfg := BPQConfig{WebURL: "http://127.0.0.1:1", FBBPort: 0}
 	ports := []PortConfig{{Num: 6, Label: "VARA FM"}}
-	p := NewPoller(cfg, ports, hub)
+	p := NewPoller(cfg, ports, hub, NewSystemdController())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

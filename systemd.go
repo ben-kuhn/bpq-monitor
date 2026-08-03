@@ -18,6 +18,11 @@ func NewSystemdController() *SystemdController {
 	return &SystemdController{}
 }
 
+func (s *SystemdController) IsActive(service string) bool {
+	cmd := exec.Command("systemctl", "--user", "is-active", "--quiet", service+".service")
+	return cmd.Run() == nil
+}
+
 func (s *SystemdController) Action(service, action string) error {
 	if !validActions[action] {
 		return fmt.Errorf("invalid action %q: must be start, stop, or restart", action)

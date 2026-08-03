@@ -40,6 +40,9 @@ func (h *Hub) Unsubscribe(ch <-chan Event) {
 }
 
 func (h *Hub) Publish(e Event) {
+	if e.Type == "" {
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, ch := range h.clients {

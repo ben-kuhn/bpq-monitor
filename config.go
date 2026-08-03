@@ -31,11 +31,12 @@ type LayoutConfig struct {
 }
 
 type PortConfig struct {
-	Num     int    `toml:"num"`
-	Label   string `toml:"label"`
-	Service string `toml:"service"`
-	Row     int    `toml:"row"`
-	Col     int    `toml:"col"`
+	Num       int    `toml:"num"`
+	Label     string `toml:"label"`
+	Service   string `toml:"service"`
+	Row       int    `toml:"row"`
+	Col       int    `toml:"col"`
+	DeafCheck bool   `toml:"deaf_check"` // restart if L2 frames heard stagnant for 1h
 }
 
 func LoadConfig(path string) (*Config, error) {

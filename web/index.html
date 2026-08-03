@@ -117,6 +117,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 
 .pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -126,6 +129,21 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   flex-shrink: 0;
 }
 
+.view-toggle {
+  font-size: 9px;
+  padding: 1px 5px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--dim);
+  cursor: pointer;
+  font-family: monospace;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.view-toggle:hover { border-color: var(--text); color: var(--text); }
+
 .pane-body {
   flex: 1;
   overflow-y: auto;
@@ -134,9 +152,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   line-height: 1.45;
   scroll-behavior: smooth;
 }
+.pane-body.hidden { display: none; }
 
 .rx { color: var(--rx); }
 .tx { color: var(--tx); }
+.log-line { color: var(--dim); }
 </style>
 </head>
 <body>
@@ -150,18 +170,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 const strip = document.getElementById('strip');
 const grid  = document.getElementById('grid');
 
-let portMap   = {};   // num → {label, service, dot, paneBody, autoScroll}
-let portState = {};   // num → last status event
+let portMap   = {};   // num → {label, service, dot, trafficBody, logBody, showingLog, autoScroll fns}
+let portState = {};
 let activeMenu = null;
 
 async function init() {
   const cfg = await fetch('/config').then(r => r.json());
   const cols = cfg.columns || 3;
 
-  // Build grid template
-  // Determine rows needed
-  const portRows = {};
-  const portCols = {};
+  const portRows = {}, portCols = {};
   let autoRow = 0, autoCol = 0;
   for (const p of cfg.ports) {
     if (p.row > 0 || p.col > 0) {
@@ -194,23 +211,66 @@ async function init() {
     pane.style.gridColumn = portCols[p.num];
     pane.style.gridRow    = portRows[p.num];
 
+    // Header with optional toggle button
     const header = document.createElement('div');
     header.className = 'pane-header';
-    header.textContent = p.label;
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = p.label;
+    header.appendChild(labelSpan);
+
+    let toggleBtn = null;
+    if (p.service) {
+      toggleBtn = document.createElement('button');
+      toggleBtn.className = 'view-toggle';
+      toggleBtn.textContent = 'Log';
+      header.appendChild(toggleBtn);
+    }
     pane.appendChild(header);
 
-    const body = document.createElement('div');
-    body.className = 'pane-body';
-    pane.appendChild(body);
+    // Traffic view
+    const trafficBody = document.createElement('div');
+    trafficBody.className = 'pane-body';
+    pane.appendChild(trafficBody);
+
+    // Log view (hidden by default)
+    const logBody = document.createElement('div');
+    logBody.className = 'pane-body hidden';
+    pane.appendChild(logBody);
+
     grid.appendChild(pane);
 
-    // Auto-scroll: pause if user scrolls up
-    let autoScroll = true;
-    body.addEventListener('scroll', () => {
-      autoScroll = body.scrollTop + body.clientHeight >= body.scrollHeight - 8;
+    // Auto-scroll state per view
+    let trafficScroll = true, logScroll = true;
+    trafficBody.addEventListener('scroll', () => {
+      trafficScroll = trafficBody.scrollTop + trafficBody.clientHeight >= trafficBody.scrollHeight - 8;
+    });
+    logBody.addEventListener('scroll', () => {
+      logScroll = logBody.scrollTop + logBody.clientHeight >= logBody.scrollHeight - 8;
     });
 
-    portMap[p.num] = { label: p.label, service: p.service, dot, body, autoScroll: () => autoScroll, setAutoScroll: v => { autoScroll = v; } };
+    let showingLog = false;
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        showingLog = !showingLog;
+        toggleBtn.textContent = showingLog ? 'Traffic' : 'Log';
+        trafficBody.classList.toggle('hidden', showingLog);
+        logBody.classList.toggle('hidden', !showingLog);
+        // Scroll to bottom when switching
+        if (showingLog) logBody.scrollTop = logBody.scrollHeight;
+        else trafficBody.scrollTop = trafficBody.scrollHeight;
+      });
+    }
+
+    portMap[p.num] = {
+      label: p.label,
+      service: p.service,
+      dot,
+      trafficBody,
+      logBody,
+      showingLog: () => showingLog,
+      trafficAutoScroll: () => trafficScroll,
+      logAutoScroll: () => logScroll,
+    };
 
     // Dropdown
     if (p.service) {
@@ -224,6 +284,8 @@ async function init() {
         if (menu.classList.contains('open')) {
           const r = chip.getBoundingClientRect();
           menu.style.left = r.left + 'px';
+          const inp = menu.querySelector('input');
+          if (inp) inp.focus();
         }
       });
     }
@@ -254,11 +316,10 @@ function buildMenu(portNum, service, chip) {
   passSection.appendChild(errSpan);
   menu.appendChild(passSection);
 
-  // Pre-fill from sessionStorage
   const storedPass = sessionStorage.getItem('actionPassword');
   if (storedPass) passInput.value = storedPass;
 
-  function addItem(label, action, condition) {
+  function addItem(label, action) {
     const item = document.createElement('div');
     item.className = 'menu-item';
     item.textContent = label;
@@ -267,6 +328,7 @@ function buildMenu(portNum, service, chip) {
     item.addEventListener('click', async e => {
       e.stopPropagation();
       const pass = passInput.value || sessionStorage.getItem('actionPassword') || '';
+      if (!pass) { passInput.focus(); return; }
       errSpan.style.display = 'none';
       const res = await fetch('/action', {
         method: 'POST',
@@ -290,9 +352,8 @@ function buildMenu(portNum, service, chip) {
   const stopItem    = addItem('■ Stop',    'stop');
   const restartItem = addItem('↺ Restart', 'restart');
 
-  // Update item availability based on port state
   menu.updateState = (state) => {
-    const running = state && state.toLowerCase().includes('connected');
+    const running = state && (state.toLowerCase().includes('connected') || state === 'Running');
     startItem.classList.toggle('disabled', running);
     stopItem.classList.toggle('disabled', !running);
     restartItem.classList.toggle('disabled', !running);
@@ -312,27 +373,33 @@ function connectSSE() {
   };
 }
 
+function appendLine(body, cls, text, autoScrollFn) {
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = text;
+  body.appendChild(line);
+  while (body.children.length > 500) body.removeChild(body.firstChild);
+  if (autoScrollFn()) body.scrollTop = body.scrollHeight;
+}
+
 function handleEvent(e) {
   const p = portMap[e.port];
   if (!p) return;
 
   if (e.type === 'status') {
     portState[e.port] = e.state;
-    const connected = e.state && e.state.toLowerCase().includes('connected');
+    const connected = e.state && (e.state.toLowerCase().includes('connected') || e.state === 'Running');
     p.dot.className = 'dot' + (connected ? ' green' : '');
-    // Update menu state if menu exists
     const menu = document.querySelector(`.menu[data-port="${e.port}"]`);
     if (menu && menu.updateState) menu.updateState(e.state);
   }
 
   if (e.type === 'monitor' && e.line) {
-    const line = document.createElement('div');
-    line.className = e.dir === 'tx' ? 'tx' : 'rx';
-    line.textContent = e.line;
-    p.body.appendChild(line);
-    // Limit to 500 lines per pane
-    while (p.body.children.length > 500) p.body.removeChild(p.body.firstChild);
-    if (p.autoScroll()) p.body.scrollTop = p.body.scrollHeight;
+    appendLine(p.trafficBody, e.dir === 'tx' ? 'tx' : 'rx', e.line, p.trafficAutoScroll);
+  }
+
+  if (e.type === 'log' && e.line) {
+    appendLine(p.logBody, 'log-line', e.line, p.logAutoScroll);
   }
 }
 
