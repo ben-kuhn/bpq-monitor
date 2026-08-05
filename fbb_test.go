@@ -15,7 +15,7 @@ import (
 
 func TestParseMonitorFrames_SingleFrame(t *testing.T) {
 	// 0xFF 0x1B 17=RX "N0CALL>CMS" 0xFE
-	data := []byte{0xFF, 0x1B, 17, 'K', 'U', '0', 'H', 'N', '>', 'C', 'M', 'S', 0xFE}
+	data := []byte{0xFF, 0x1B, 17, 'N', '0', 'C', 'A', 'L', 'L', '>', 'C', 'M', 'S', 0xFE}
 	frames := parseMonitorFrames(data)
 	if len(frames) != 1 {
 		t.Fatalf("got %d frames, want 1", len(frames))
@@ -30,7 +30,7 @@ func TestParseMonitorFrames_SingleFrame(t *testing.T) {
 
 func TestParseMonitorFrames_TXFrame(t *testing.T) {
 	// 0xFF 0x1B 91=TX "N0CALL" 0xFE
-	data := []byte{0xFF, 0x1B, 91, 'K', 'U', '0', 'H', 'N', 0xFE}
+	data := []byte{0xFF, 0x1B, 91, 'N', '0', 'C', 'A', 'L', 'L', 0xFE}
 	frames := parseMonitorFrames(data)
 	if len(frames) != 1 {
 		t.Fatalf("got %d frames, want 1", len(frames))
@@ -109,7 +109,7 @@ func TestParseMonitorFrames_PortDefAtStartRealTraffic(t *testing.T) {
 	// then a monitor frame — matching the wire capture from LinBPQ.
 	portDef := append([]byte("Connected to TelnetServer\r"), 0xFF, 0xFF)
 	portDef = append(portDef, []byte("9|0 Mail Monitor|1 Telnet|2 VHF|3 HF|")...)
-	monFrame := []byte{0xFF, 0x1B, 91, 'K', 'U', '0', 'H', 'N', '>', 'A', 'P', 'R', 'S', 0xFE}
+	monFrame := []byte{0xFF, 0x1B, 91, 'N', '0', 'C', 'A', 'L', 'L', '>', 'A', 'P', 'R', 'S', 0xFE}
 	data := append(portDef, monFrame...)
 
 	frames := parseMonitorFrames(data)

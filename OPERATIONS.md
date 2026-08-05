@@ -2,7 +2,7 @@
 
 ## Managing modem services
 
-All modem services run as systemd **user** services under `n0call`.
+All modem services run as systemd **user** services.
 
 ### From the browser UI
 
@@ -17,6 +17,8 @@ systemctl --user start   <service>
 systemctl --user stop    <service>
 systemctl --user restart <service>
 ```
+
+Example service names (configure your own in `bpq-monitor.toml`):
 
 | Service name        | Modem            | BPQ port |
 |---------------------|------------------|----------|
@@ -68,8 +70,8 @@ journalctl --user -u bpq-monitor.service -g watchdog
 
 ## Updating the monitor app
 
-The binary is built from `/home/n0call/dev/bpq-monitor` and installed via
-NixOS.  After changing source files:
+After changing source files, rebuild and install via your package manager.
+With NixOS:
 
 ```sh
 sudo nixos-rebuild switch
