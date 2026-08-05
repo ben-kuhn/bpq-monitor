@@ -6,15 +6,20 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // monitorFrame is a single decoded monitor frame received from BPQ.
 type monitorFrame struct {
+	port int    // BPQ port number, parsed from frame text
 	dir  string // "rx" or "tx"
 	line string // decoded frame text
 }
+
+var rePortNum = regexp.MustCompile(`\bPort=(\d+)`)
 
 // parseMonitorFrames extracts monitor frames from a raw byte slice.
 //
@@ -64,6 +69,7 @@ func parseMonitorFrames(data []byte) []monitorFrame {
 			continue
 		}
 		if frame[1] != 0x1B {
+			log.Printf("fbb: unexpected frame byte[1]=0x%02x len=%d bytes=%x", frame[1], len(frame), frame)
 			continue
 		}
 
@@ -75,23 +81,31 @@ func parseMonitorFrames(data []byte) []monitorFrame {
 			dir = "tx"
 		}
 
-		frames = append(frames, monitorFrame{dir: dir, line: text})
+		// Parse "Port=N" from the frame text to route to the correct pane.
+		port := 0
+		if m := rePortNum.FindStringSubmatch(text); m != nil {
+			port, _ = strconv.Atoi(m[1])
+		}
+
+		log.Printf("fbb: colour=%d dir=%s port=%d: %s", colourCode, dir, port, text)
+		frames = append(frames, monitorFrame{port: port, dir: dir, line: text})
 	}
 	return frames
 }
 
 // FBBClient connects to BPQ's BPQTermTCP monitor port and publishes
 // decoded monitor frames to the Hub as Event{Type:"monitor"} events.
+// A single connection with an all-ports portmask is used so that BPQ
+// delivers frames for every port type (including VARA), matching how
+// QtTermTCP operates.
 type FBBClient struct {
-	cfg  BPQConfig
-	hub  *Hub
-	port int // BPQ port number (1-64); portmask = 1<<(port-1)
+	cfg BPQConfig
+	hub *Hub
 }
 
-// NewFBBClient creates a new FBBClient that monitors a single BPQ port.
-// One FBBClient per configured port; BPQ filters server-side by portmask.
-func NewFBBClient(cfg BPQConfig, hub *Hub, port int) *FBBClient {
-	return &FBBClient{cfg: cfg, hub: hub, port: port}
+// NewFBBClient creates a new FBBClient.
+func NewFBBClient(cfg BPQConfig, hub *Hub) *FBBClient {
+	return &FBBClient{cfg: cfg, hub: hub}
 }
 
 // Run connects to BPQ, logs in, and streams monitor frames.
@@ -138,10 +152,8 @@ func (f *FBBClient) connect(ctx context.Context) error {
 //     password authenticates, "BPQTERMTCP" enters BPQTermMode.
 //
 //  2. Send the monitor-control string "\\<portmask_hex> <mtx> <mcom> <nodes>
-//     <colour> <ui> <utf8> <P8>\r".  portmask has one bit set for f.port
-//     so BPQ filters server-side and sends only that port's frames.
-//     mtx=1 (TX on), mcom=1 (connected on), nodes=0, colour=1,
-//     ui=0, utf8=0, P8=1 (request port-definition list on login).
+//     <colour> <ui> <utf8> <P8>\r".  All-ports portmask (ffffffffffffffff)
+//     so BPQ delivers frames for every port type including VARA.
 func (f *FBBClient) login(conn net.Conn) error {
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	defer conn.SetDeadline(time.Time{})
@@ -153,11 +165,10 @@ func (f *FBBClient) login(conn net.Conn) error {
 	}
 
 	// Step 2: monitor-control command.
-	// portmask: bit (port-1) enables BPQ-side filtering to this port only.
-	// LinBPQ TelnetV6.c gates on memcmp(..., "\\\\", 4) — requires exactly
-	// four backslash bytes before the portmask hex.
-	portMask := uint64(1) << uint(f.port-1)
-	monctl := fmt.Sprintf("\\\\\\\\%016x 1 1 0 1 0 0 1\r", portMask)
+	// All-ports portmask: ffffffffffffffff monitors every BPQ port.
+	// mtx=1 (TX on), mcom=1 (connected on), nodes=0, colour=1, ui=1, utf8=0, P8=1.
+	// LinBPQ TelnetV6.c requires exactly four backslash bytes before the hex portmask.
+	monctl := "\\\\\\\\ffffffffffffffff 1 1 0 1 1 0 1\r"
 	if _, err := fmt.Fprint(conn, monctl); err != nil {
 		return fmt.Errorf("write monitor control: %w", err)
 	}
@@ -197,9 +208,12 @@ func (f *FBBClient) readFrames(ctx context.Context, conn net.Conn) error {
 			}
 
 			for _, fr := range frames {
+				if fr.port == 0 {
+					continue // skip frames we can't route to a pane
+				}
 				f.hub.Publish(Event{
 					Type: "monitor",
-					Port: f.port,
+					Port: fr.port,
 					Dir:  fr.dir,
 					Line: fr.line,
 				})

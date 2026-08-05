@@ -29,10 +29,13 @@ func main() {
 
 	go poller.Run(ctx)
 
-	// One FBBClient and one JournalClient per configured port.
+	// Single FBBClient with all-ports portmask — BPQ delivers frames for
+	// every port type (including VARA) on one connection; port is parsed
+	// from each frame's "Port=N" text field.
+	go NewFBBClient(cfg.BPQ, hub).Run(ctx)
+
+	// One JournalClient per configured port that has a service.
 	for _, p := range cfg.Ports {
-		fbb := NewFBBClient(cfg.BPQ, hub, p.Num)
-		go fbb.Run(ctx)
 		if p.Service != "" {
 			jc := NewJournalClient(p.Num, p.Service, hub)
 			go jc.Run(ctx)
