@@ -111,12 +111,23 @@ func NewFBBClient(cfg BPQConfig, hub *Hub) *FBBClient {
 // Run connects to BPQ, logs in, and streams monitor frames.
 // On disconnect it waits 5 s then reconnects.  Run returns only when ctx
 // is cancelled.
+//
+// BPQ's monitor session silently stops delivering frames after ~20-30 minutes
+// without closing the TCP connection.  To guarantee freshness, each connection
+// is wrapped in a 15-minute deadline; when it fires we reconnect.
 func (f *FBBClient) Run(ctx context.Context) {
 	for {
-		if err := f.connect(ctx); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
+		connCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+		err := f.connect(connCtx)
+		periodic := connCtx.Err() == context.DeadlineExceeded
+		cancel()
+
+		if ctx.Err() != nil {
+			return
+		}
+		if periodic {
+			log.Printf("fbb: 15-minute session limit reached, reconnecting")
+		} else if err != nil {
 			log.Printf("fbb: %v", err)
 		}
 		select {
@@ -134,6 +145,12 @@ func (f *FBBClient) connect(ctx context.Context) error {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
 	defer conn.Close()
+	// TCP keepalives detect silently broken connections (e.g. BPQ restarted
+	// while our socket lingered).
+	if tc, ok := conn.(*net.TCPConn); ok {
+		tc.SetKeepAlive(true)
+		tc.SetKeepAlivePeriod(60 * time.Second)
+	}
 	log.Printf("fbb: connected to %s", addr)
 
 	if err := f.login(conn); err != nil {
