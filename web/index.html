@@ -150,7 +150,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   padding: 4px 6px;
   font-size: 11px;
   line-height: 1.45;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 .pane-body.hidden { display: none; }
 
@@ -261,10 +261,17 @@ async function init() {
       });
     }
 
+    let menuEl = null;
+    if (p.service) {
+      menuEl = buildMenu(p.num, p.service, chip);
+      document.body.appendChild(menuEl);
+    }
+
     portMap[p.num] = {
       label: p.label,
       service: p.service,
       dot,
+      menu: menuEl,
       trafficBody,
       logBody,
       showingLog: () => showingLog,
@@ -274,17 +281,15 @@ async function init() {
 
     // Dropdown
     if (p.service) {
-      const menu = buildMenu(p.num, p.service, chip);
-      document.body.appendChild(menu);
       chip.addEventListener('click', e => {
         e.stopPropagation();
-        if (activeMenu && activeMenu !== menu) activeMenu.classList.remove('open');
-        menu.classList.toggle('open');
-        activeMenu = menu.classList.contains('open') ? menu : null;
-        if (menu.classList.contains('open')) {
+        if (activeMenu && activeMenu !== menuEl) activeMenu.classList.remove('open');
+        menuEl.classList.toggle('open');
+        activeMenu = menuEl.classList.contains('open') ? menuEl : null;
+        if (menuEl.classList.contains('open')) {
           const r = chip.getBoundingClientRect();
-          menu.style.left = r.left + 'px';
-          const inp = menu.querySelector('input');
+          menuEl.style.left = r.left + 'px';
+          const inp = menuEl.querySelector('input');
           if (inp) inp.focus();
         }
       });
@@ -374,12 +379,13 @@ function connectSSE() {
 }
 
 function appendLine(body, cls, text, autoScrollFn) {
+  const atBottom = autoScrollFn();
   const line = document.createElement('div');
   line.className = cls;
   line.textContent = text;
   body.appendChild(line);
   while (body.children.length > 500) body.removeChild(body.firstChild);
-  if (autoScrollFn()) body.scrollTop = body.scrollHeight;
+  if (atBottom) body.scrollTop = 1e9; // browser clamps to scrollHeight-clientHeight
 }
 
 function handleEvent(e) {
@@ -390,8 +396,7 @@ function handleEvent(e) {
     portState[e.port] = e.state;
     const connected = e.state && (e.state.toLowerCase().includes('connected') || e.state === 'Running');
     p.dot.className = 'dot' + (connected ? ' green' : '');
-    const menu = document.querySelector(`.menu[data-port="${e.port}"]`);
-    if (menu && menu.updateState) menu.updateState(e.state);
+    if (p.menu && p.menu.updateState) p.menu.updateState(e.state);
   }
 
   if (e.type === 'monitor' && e.line) {

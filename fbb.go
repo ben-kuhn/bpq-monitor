@@ -93,11 +93,10 @@ func parseMonitorFrames(data []byte) []monitorFrame {
 	return frames
 }
 
-// FBBClient connects to BPQ's BPQTermTCP monitor port and publishes
+// FBBClient connects to BPQ's QtTermTCP monitor port and publishes
 // decoded monitor frames to the Hub as Event{Type:"monitor"} events.
 // A single connection with an all-ports portmask is used so that BPQ
-// delivers frames for every port type (including VARA), matching how
-// QtTermTCP operates.
+// delivers frames for every port type (including VARA).
 type FBBClient struct {
 	cfg BPQConfig
 	hub *Hub
@@ -161,8 +160,7 @@ func (f *FBBClient) connect(ctx context.Context) error {
 	return f.readFrames(ctx, conn)
 }
 
-// login performs the BPQTermTCP handshake confirmed from LinBPQ TelnetV6.c
-// and BPQTermTCP.c:
+// login performs the QtTermTCP handshake confirmed from LinBPQ TelnetV6.c:
 //
 //  1. Send "<username>\r<password>\rBPQTERMTCP\r" in one write — BPQ
 //     processes each CR-delimited token: username selects account,
